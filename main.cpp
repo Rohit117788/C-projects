@@ -9,6 +9,21 @@
 #include <fstream>
 #include <sstream>
 #include <algorithm>
+#include "picosha2.h"
+
+// --- Admin backup code and password reset integration ---
+#include <random>
+
+// Helper to generate a random backup code
+std::string generateBackupCode(int length = 10) {
+    static const char charset[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<> dis(0, sizeof(charset) - 2);
+    std::string code;
+    for (int i = 0; i < length; ++i) code += charset[dis(gen)];
+    return code;
+}
 
 #define RESET   "\033[0m"
 #define BLUE    "\033[1;34m"
@@ -112,22 +127,49 @@ bool adminExists() {
     return static_cast<bool>(getline(file, line));
 }
 
+// --- Admin forgot password flow ---
 bool adminLogin() {
     std::string user, pass, line;
     coloredInput("Enter admin username: ", user);
     coloredInput("Enter admin password: ", pass);
     std::ifstream file("admins.txt");
-    std::string u, p;
+    std::string u, p, b;
     if (getline(file, line)) {
         std::stringstream ss(line);
         getline(ss, u, ',');
         getline(ss, p, ',');
+        getline(ss, b, ',');
         if (u != user) {
             std::cout << RED << "Wrong username!" << RESET << std::endl;
             return false;
         }
-        if (p != pass) {
+        if (p != picosha2::hash256_hex_string(pass)) {
             std::cout << RED << "Wrong password!" << RESET << std::endl;
+            std::string choice;
+            std::cout << YELLOW << "Forgot Password? (y/n): " << RESET;
+            getline(std::cin, choice);
+            if (choice == "y" || choice == "Y") {
+                std::string uname, backup;
+                coloredInput("Enter admin username: ", uname);
+                coloredInput("Enter backup code: ", backup);
+                if (u == uname && b == picosha2::hash256_hex_string(backup)) {
+                    std::string newPass;
+                    while (true) {
+                        coloredInput("Enter new admin password (min 7 chars, 1 symbol): ", newPass);
+                        if (!isValidPassword(newPass)) {
+                            std::cout << RED << "Password must be at least 7 characters and include at least one symbol!" << RESET << std::endl;
+                            continue;
+                        }
+                        break;
+                    }
+                    std::ofstream fileOut("admins.txt");
+                    fileOut << u << "," << picosha2::hash256_hex_string(newPass) << "," << b << "\n";
+                    std::cout << GREEN << "Admin password reset successfully!" << RESET << std::endl;
+                } else {
+                    std::cout << RED << "Backup code or username incorrect!" << RESET << std::endl;
+                }
+                pause();
+            }
             return false;
         }
         return true;
@@ -155,7 +197,11 @@ void registerAdmin() {
         break;
     }
     std::ofstream file("admins.txt");
-    file << user << "," << pass << "\n";
+    std::string pass_hash = picosha2::hash256_hex_string(pass); // Hash password
+    std::string backupCode = generateBackupCode();
+    std::cout << YELLOW << "Your admin backup code (save this!): " << backupCode << RESET << std::endl;
+    std::string backup_hash = picosha2::hash256_hex_string(backupCode);
+    file << user << "," << pass_hash << "," << backup_hash << "\n";
     std::cout << GREEN << "Admin registered successfully!" << RESET << std::endl;
     pause();
 }
@@ -179,7 +225,11 @@ void appointNewAdmin() {
         break;
     }
     std::ofstream file("admins.txt");
-    file << user << "," << pass << "\n";
+    std::string pass_hash = picosha2::hash256_hex_string(pass); // Hash password
+    std::string backupCode = generateBackupCode();
+    std::cout << YELLOW << "Your admin backup code (save this!): " << backupCode << RESET << std::endl;
+    std::string backup_hash = picosha2::hash256_hex_string(backupCode);
+    file << user << "," << pass_hash << "," << backup_hash << "\n";
     std::cout << GREEN << "New admin appointed successfully!" << RESET << std::endl;
     pause();
 }
@@ -218,8 +268,42 @@ void mainMenu() {
                 pause();
                 continue;
             }
-            if (acc->getPin() != pin) {
+            if (acc->getPin() != picosha2::hash256_hex_string(pin)) {
                 std::cout << RED << "Wrong PIN!" << RESET << std::endl;
+                std::string choice;
+                std::cout << YELLOW << "Forgot PIN? (y/n): " << RESET;
+                getline(std::cin, choice);
+                if (choice == "y" || choice == "Y") {
+                    std::string aadhar, name, dob;
+                    coloredInput("Enter your Aadhaar: ", aadhar);
+                    coloredInput("Enter your name: ", name);
+                    coloredInput("Enter your date of birth (DDMMYYYY): ", dob);
+                    Account* found = nullptr;
+                    for (auto& a : accounts) {
+                        if (a.getAadhar() == aadhar && a.getName() == name /* && a.getDOB() == dob */) {
+                            found = &a;
+                            break;
+                        }
+                    }
+                    if (found) {
+                        std::string newPin;
+                        while (true) {
+                            pinInput(newPin);
+                            if (!isValidUserPin(newPin)) {
+                                std::cout << RED << "PIN must be exactly 4 digits!" << RESET << std::endl;
+                                continue;
+                            }
+                            break;
+                        }
+                        found->setPin(picosha2::hash256_hex_string(newPin));
+                        DataManager::saveAccounts(accounts, "accounts.txt");
+                        std::cout << GREEN << "PIN reset successfully!" << RESET << std::endl;
+                    } else {
+                        std::cout << RED << "No matching account found!" << RESET << std::endl;
+                    }
+                    pause();
+                    continue;
+                }
                 pause();
                 continue;
             }
@@ -357,7 +441,8 @@ void mainMenu() {
             branch = selectBranch();
             std::string accNum = DataManager::generateAccountNumber();
             std::string custID = DataManager::generateCustomerID();
-            Account newAcc(accNum, custID, name, 0, gender, phone, address, aadhar, accType, 0.0, pin, branch);
+            std::string pin_hash = picosha2::hash256_hex_string(pin);
+            Account newAcc(accNum, custID, name, 0, gender, phone, address, aadhar, accType, 0.0, pin_hash, branch);
             accounts.push_back(newAcc);
             DataManager::saveAccounts(accounts, "accounts.txt");
             std::cout << GREEN << "Account created! Your Account Number: " << accNum << RESET << std::endl;
@@ -386,6 +471,7 @@ void mainMenu() {
                     << "11. View All User Balances\n"
                     << "12. View Admin Transactions\n"
                     << "13. Delete User Account\n"
+                    << "14. Reset Admin Password\n"
                     << RESET;
                 int adminChoice;
                 coloredInput("Select option: ", adminChoice);
@@ -448,7 +534,7 @@ void mainMenu() {
                                 }
                                 break;
                             }
-                            found->setPin(newPin);
+                            found->setPin(picosha2::hash256_hex_string(newPin));
                             std::cout << GREEN << "PIN reset successfully!" << RESET << std::endl;
                         } else if (req.type == "ACCNUM") {
                             std::cout << GREEN << "User's Account Number: " << found->getAccountNumber() << RESET << std::endl;
@@ -516,6 +602,33 @@ void mainMenu() {
                         std::cout << RED << "Account not found!" << RESET << std::endl;
                     }
                     pause();
+                } else if (adminChoice == 14) {
+                    std::string currentPass, newPass;
+                    std::ifstream fileIn("admins.txt");
+                    std::string line, u, p;
+                    if (getline(fileIn, line)) {
+                        std::stringstream ss(line);
+                        getline(ss, u, ',');
+                        getline(ss, p, ',');
+                    }
+                    coloredInput("Enter current admin password: ", currentPass);
+                    if (p != picosha2::hash256_hex_string(currentPass)) {
+                        std::cout << RED << "Wrong current password!" << RESET << std::endl;
+                        pause();
+                    } else {
+                        while (true) {
+                            coloredInput("Enter new admin password (min 7 chars, 1 symbol): ", newPass);
+                            if (!isValidPassword(newPass)) {
+                                std::cout << RED << "Password must be at least 7 characters and include at least one symbol!" << RESET << std::endl;
+                                continue;
+                            }
+                            break;
+                        }
+                        std::ofstream fileOut("admins.txt");
+                        fileOut << u << "," << picosha2::hash256_hex_string(newPass) << "\n";
+                        std::cout << GREEN << "Admin password reset successfully!" << RESET << std::endl;
+                        pause();
+                    }
                 }
                 pause();
             }
