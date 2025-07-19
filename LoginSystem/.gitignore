@@ -1,0 +1,21 @@
+# Ignore real config file with API keys
+config.h
+
+# Ignore data files with real user data
+user.txt
+admin.txt
+
+# Ignore compiled executables
+*.exe
+*.obj
+*.o
+
+# Ignore IDE files
+.vscode/
+*.vcxproj
+*.vcxproj.filters
+*.sln
+
+# Ignore temporary files
+*.tmp
+*.log
