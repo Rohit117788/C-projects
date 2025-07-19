@@ -1,0 +1,22 @@
+# Ignore build output
+*.exe
+*.obj
+*.pdb
+*.ilk
+*.user
+*.aps
+*.ncb
+*.sdf
+*.opensdf
+*.log
+*.tlog
+*.ipch
+*.db
+*.suo
+*.idb
+*.pch
+*.class
+*.o
+*.out
+*.tmp
+*.vscode/ 
